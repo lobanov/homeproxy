@@ -1,0 +1,58 @@
+# Reverse proxy: local network -> service on the tailnet.
+#
+# Configured via environment (see .env.example, loaded by ./homeproxy.sh):
+#   UPSTREAM     tailnet service, e.g. https://box.tail1234.ts.net (port defaults to 443)
+#                An https:// upstream enables TLS automatically; use the MagicDNS
+#                name, not a 100.x IP, so the certificate (SNI) matches.
+#   LISTEN_PORT  port to expose on the LAN (default 8080)
+#   API_KEY      required in requests as `Authorization: Bearer <API_KEY>`
+{
+	# Plain HTTP on the LAN; no certificates.
+	auto_https off
+	admin localhost:2019
+
+	servers {
+		# No read/write deadlines so long-lived streams aren't cut off.
+		timeouts {
+			read_body 0
+			write 0
+			idle 5m
+		}
+	}
+}
+
+:{$LISTEN_PORT:8080} {
+	# Only serve clients on private/loopback ranges.
+	@outside not remote_ip private_ranges
+	respond @outside "Forbidden" 403
+
+	# Bearer token auth.
+	@unauthorized not header Authorization "Bearer {$API_KEY}"
+	handle @unauthorized {
+		header WWW-Authenticate "Bearer"
+		header Content-Type application/json
+		respond `{"error":{"message":"Invalid or missing API key","type":"unauthorized"}}` 401
+	}
+
+	reverse_proxy {$UPSTREAM} {
+		# Flush every write immediately: required for SSE, chunked and
+		# token-by-token streaming responses. WebSockets are handled automatically.
+		flush_interval -1
+
+		# Don't pass the proxy's key on to the upstream.
+		header_up -Authorization
+
+		# Keep WebSockets/streams open for a while across `caddy reload`.
+		stream_close_delay 5m
+
+		transport http {
+			dial_timeout 10s
+			keepalive 2m
+		}
+	}
+
+	log {
+		output stderr
+		format {$LOG_FORMAT:console}
+	}
+}
