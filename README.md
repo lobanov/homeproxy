@@ -46,10 +46,12 @@ standard library only) showing:
 - client and upstream connections as **streaming**, **waiting** (request sent,
   upstream still working) or **idle**, with bytes up/down and current rate;
 - requests in flight to the upstream and upstream failures;
+- recent clients by IP: requests, open and peak concurrent connections, and
+  bytes up/down of their completed requests;
 - recent completed requests with status, duration and size;
 - the tail of Caddy's log. Full output is appended to `caddy.log`.
 
-Keys: `q` quit, `r` reload Caddyfile, `c` clear request history.
+Keys: `q` quit, `r` reload Caddyfile, `c` clear recent clients and requests.
 
 Connection data comes from `nettop`, in-flight counts from Caddy's admin API
 (`localhost:2019`), and requests from Caddy's JSON access log, which is written

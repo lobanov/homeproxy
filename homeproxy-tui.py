@@ -6,7 +6,7 @@ admin API and macOS `nettop` to show live connections, whether each one is
 streaming, waiting on the upstream or idle, and how many bytes it has moved.
 
 Started by `./homeproxy.sh tui`, which loads .env first.
-Keys: q quit, r reload Caddyfile, c clear request history.
+Keys: q quit, r reload Caddyfile, c clear request and client history.
 Raw Caddy output is appended to caddy.log next to this script.
 """
 
@@ -80,9 +80,10 @@ def sample_sockets(pid):
 class Conn:
     """One TCP connection. `up` flows toward the upstream, `down` toward the client."""
 
-    def __init__(self, kind, peer, now):
+    def __init__(self, kind, host, port, now):
         self.kind = kind
-        self.peer = peer
+        self.host = host
+        self.peer = f"{host}:{port}"
         self.first_seen = now
         self.up = self.down = 0
         self.last_up = self.last_down = None
@@ -131,6 +132,7 @@ class State:
         self.total_down = 0
         self.total_up = 0
         self.conns = {}
+        self.clients = {}  # client IP -> traffic summary, see client()
         self.last_poll = None
         self.inflight = 0
         self.fails = 0
@@ -185,6 +187,24 @@ class State:
             self.total_requests += 1
             self.total_down += r["down"]
             self.total_up += r["up"]
+            c = self.client(r["client"], r["ts"])
+            c["requests"] += 1
+            c["down"] += r["down"]
+            c["up"] += r["up"]
+
+    def client(self, ip, now):
+        """Summary for one client IP; call with the lock held."""
+        c = self.clients.get(ip)
+        if c is None:
+            c = self.clients[ip] = {"requests": 0, "up": 0, "down": 0,
+                                    "conns": 0, "peak": 0, "last": now}
+        c["last"] = max(c["last"], now)
+        return c
+
+    def clear_history(self):
+        with self.lock:
+            self.requests.clear()
+            self.clients.clear()
 
     def event(self, level, msg, ts=None):
         with self.lock:
@@ -221,7 +241,7 @@ class State:
                 continue  # admin API and anything else
             conn = self.conns.get(key)
             if conn is None:
-                conn = self.conns[key] = Conn(kind, f"{remote[0]}:{remote[1]}", now)
+                conn = self.conns[key] = Conn(kind, remote[0], remote[1], now)
             conn.update(up, down, tcp_state, now, dt)
 
         for key, conn in list(self.conns.items()):
@@ -229,6 +249,16 @@ class State:
                 conn.closed_at = now
             if conn.closed_at and now - conn.closed_at > CLOSED_LINGER:
                 del self.conns[key]
+
+        open_by_ip = collections.Counter(
+            c.host for c in self.conns.values() if c.kind == "client" and not c.closed_at)
+        with self.lock:
+            for c in self.clients.values():
+                c["conns"] = 0
+            for ip, n in open_by_ip.items():
+                c = self.client(ip, now)
+                c["conns"] = n
+                c["peak"] = max(c["peak"], n)
 
     def reload(self):
         def run():
@@ -307,6 +337,8 @@ def draw(scr, st, now):
 
     with st.lock:
         requests = list(st.requests)
+        recent_clients = sorted(((ip, dict(c)) for ip, c in st.clients.items()),
+                                key=lambda kv: kv[1]["last"], reverse=True)
         events = list(st.events)
         totals = (st.total_requests, st.total_down, st.total_up)
     conns = sorted(st.conns.values(), key=lambda c: c.first_seen)
@@ -333,7 +365,7 @@ def draw(scr, st, now):
     cols = f"  {'STATE':<11} {'CLIENT':<26} {'AGE':>7} {'QUIET':>7} {'↑ UP':>10} {'↓ DOWN':>10} {'↓ RATE':>11}"
     p.line((f"CLIENT CONNECTIONS ({sum(1 for c in clients if not c.closed_at)})", bold))
     p.line((cols, dim))
-    max_clients = max(1, p.room(log_rows + 8))
+    max_clients = max(1, p.room(log_rows + 17))
     for c in clients[:max_clients]:
         p.line(*conn_row(c, now, st.inflight))
     if len(clients) > max_clients:
@@ -348,6 +380,21 @@ def draw(scr, st, now):
         p.line(*conn_row(c, now, st.inflight))
     if not upstreams:
         p.line(("  none", dim))
+    p.line(("", 0))
+
+    # Per-client summary
+    p.line(("RECENT CLIENTS", bold))
+    p.line((f"  {'CLIENT':<26} {'LAST SEEN':>9} {'REQUESTS':>8} {'CONNS':>5} {'PEAK':>4} {'↑ UP':>10} {'↓ DOWN':>10}", dim))
+    max_recent = 5
+    for ip, c in recent_clients[:max_recent]:
+        attr = 0 if c["conns"] else dim
+        p.line((f"  {ip:<26} {human_age(now - c['last']) + ' ago':>9} {c['requests']:>8} ", attr),
+               (f"{c['conns']:>5}", color(GREEN) if c["conns"] else dim),
+               (f" {c['peak']:>4} {human_bytes(c['up']):>10} {human_bytes(c['down']):>10}", attr))
+    if len(recent_clients) > max_recent:
+        p.line((f"  … {len(recent_clients) - max_recent} more", dim))
+    if not recent_clients:
+        p.line(("  none yet", dim))
     p.line(("", 0))
 
     # Recent requests
@@ -408,8 +455,7 @@ def run_ui(scr, st):
             st.event("info", "reloading config…")
             st.reload()
         if ch in (ord("c"), ord("C")):
-            with st.lock:
-                st.requests.clear()
+            st.clear_history()
 
 
 def stop(proc):
