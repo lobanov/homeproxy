@@ -26,6 +26,7 @@ Edit `.env`:
 | `LISTEN_PORT` | Port to listen on (default `8080`).                                  |
 | `API_KEY`     | Bearer key clients must send. Generate with `openssl rand -hex 32`. Set it empty (`API_KEY=`) to disable auth; it must still be present. |
 | `UPSTREAM_API_KEY` | Optional bearer key the proxy sends to the upstream. Leave empty if the upstream needs no auth. |
+| `CADDY_ADMIN` | Caddy admin API address (default `localhost:2019`). Change it to run a second instance. |
 
 ## Usage
 
@@ -51,10 +52,23 @@ standard library only) showing:
 - requests in flight to the upstream and upstream failures;
 - recent clients by IP: requests, open and peak concurrent connections, and
   bytes up/down of their completed requests;
-- recent completed requests with status, duration and size;
+- recent requests with status, duration and size, including ones still in flight;
 - the tail of Caddy's log. Full output is appended to `caddy.log`.
 
-Keys: `q` quit, `r` reload Caddyfile, `c` clear recent clients and requests.
+Keys: `q` quit, `r` reload Caddyfile, `c` clear recent clients and requests,
+`↑`/`↓` select a request, `Enter` open it.
+
+The request view shows the headers as sent upstream, the request body and the
+response headers and body (JSON pretty-printed, gzip decoded), updating live while
+a response streams. Keys: `Esc` back, `↑`/`↓`/`PgUp`/`PgDn`/`g`/`G` scroll (`G` follows
+a stream), `Tab` next section, `w` wrap long lines, `a` join the text deltas of an
+OpenAI or Anthropic event stream, `s` save the request to `captures/` as JSON.
+
+To capture payloads, the dashboard runs a small proxy on a random local port and
+Caddy sends plain HTTP requests through it to the upstream; WebSockets still go
+direct. Only the first 256 KB of each body, for the last 100 requests, is kept,
+in memory. API keys and cookies in headers are shown as `REDACTED`, but bodies are
+shown as is. `run`/`start` don't use the capture proxy.
 
 Connection data comes from `nettop`, in-flight counts from Caddy's admin API
 (`localhost:2019`), and requests from Caddy's JSON access log, which is written

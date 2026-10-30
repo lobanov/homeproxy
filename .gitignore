@@ -4,3 +4,6 @@
 # Runtime output
 caddy.log
 __pycache__/
+
+# Requests saved from the dashboard (may contain prompts)
+captures/

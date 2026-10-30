@@ -98,7 +98,7 @@ case "$cmd" in
   status)
     banner
     check_upstream
-    curl -fsS localhost:2019/config/ >/dev/null 2>&1 \
+    curl -fsS "${CADDY_ADMIN:-localhost:2019}/config/" >/dev/null 2>&1 \
       && echo "caddy: running" || echo "caddy: not running"
     ;;
   *)

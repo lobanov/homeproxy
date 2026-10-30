@@ -10,10 +10,27 @@
 #   API_KEY      required in requests as `Authorization: Bearer <API_KEY>`;
 #                empty disables auth
 #   UPSTREAM_API_KEY  optional; sent upstream as `Authorization: Bearer <UPSTREAM_API_KEY>`
+#   CADDY_ADMIN  admin API address (default localhost:2019)
+#   CAPTURE_URL  set by the dashboard: its local capture proxy, which forwards to
+#                UPSTREAM and records headers and bodies. Empty = proxy directly.
+(proxy_options) {
+	# Flush every write immediately: required for SSE, chunked and
+	# token-by-token streaming responses. WebSockets are handled automatically.
+	flush_interval -1
+
+	# Keep WebSockets/streams open for a while across `caddy reload`.
+	stream_close_delay 5m
+
+	transport http {
+		dial_timeout 10s
+		keepalive 2m
+	}
+}
+
 {
 	# Plain HTTP on the LAN; no certificates.
 	auto_https off
-	admin localhost:2019
+	admin {$CADDY_ADMIN:localhost:2019}
 
 	servers {
 		# No read/write deadlines so long-lived streams aren't cut off.
@@ -53,17 +70,24 @@
 		request_header @upstreamKey Authorization "Bearer {$UPSTREAM_API_KEY}"
 		request_header @noUpstreamKey -Authorization
 
-		reverse_proxy {$UPSTREAM} {
-			# Flush every write immediately: required for SSE, chunked and
-			# token-by-token streaming responses. WebSockets are handled automatically.
-			flush_interval -1
+		# Lets the dashboard match its captured payloads to access log entries.
+		log_append id {http.request.uuid}
 
-			# Keep WebSockets/streams open for a while across `caddy reload`.
-			stream_close_delay 5m
-
-			transport http {
-				dial_timeout 10s
-				keepalive 2m
+		# Via the dashboard's capture proxy when it runs one. WebSockets always go
+		# direct, the capture proxy only speaks plain HTTP.
+		@capture {
+			expression `"{$CAPTURE_URL}" != ""`
+			not header Connection *Upgrade*
+		}
+		handle @capture {
+			request_header X-Homeproxy-Id {http.request.uuid}
+			reverse_proxy {$CAPTURE_URL:http://127.0.0.1:1} {
+				import proxy_options
+			}
+		}
+		handle {
+			reverse_proxy {$UPSTREAM} {
+				import proxy_options
 			}
 		}
 	}
