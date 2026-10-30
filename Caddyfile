@@ -45,9 +45,13 @@
 :{$LISTEN_PORT:8080} {
 	bind {$LISTEN_ADDR:127.0.0.1}
 
-	# Only serve clients on private/loopback ranges.
+	# Only serve clients on private/loopback ranges. In a handle block, the
+	# first one written, so it runs before auth: a bare `respond` would be
+	# ordered after the handle blocks below and never fire.
 	@outside not remote_ip private_ranges
-	respond @outside "Forbidden" 403
+	handle @outside {
+		respond "Forbidden" 403
+	}
 
 	# Bearer token auth, skipped when API_KEY is empty.
 	@unauthorized {
