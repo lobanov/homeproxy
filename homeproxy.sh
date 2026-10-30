@@ -22,10 +22,12 @@ if [[ -f "$DIR/.env" ]]; then
 fi
 
 : "${UPSTREAM:?UPSTREAM is not set (copy .env.example to .env)}"
-: "${API_KEY:?API_KEY is not set (generate one: openssl rand -hex 32)}"
-export UPSTREAM API_KEY LISTEN_PORT="${LISTEN_PORT:-8080}"
+: "${API_KEY?API_KEY is not set (generate one: openssl rand -hex 32, or set it empty to disable auth)}"
+export UPSTREAM API_KEY LISTEN_ADDR="${LISTEN_ADDR:-127.0.0.1}" LISTEN_PORT="${LISTEN_PORT:-8080}"
 
 die() { echo "error: $*" >&2; exit 1; }
+
+[[ -n "$API_KEY" ]] || echo "warning: API_KEY is empty, clients can use the proxy without a key" >&2
 
 command -v caddy >/dev/null || die "caddy not found (brew install caddy)"
 
@@ -54,8 +56,17 @@ lan_ip() {
     || hostname -I 2>/dev/null | awk '{print $1}' || true
 }
 
+# Address clients should use: the LAN IP when bound to all interfaces.
+proxy_host() {
+  local addr="${LISTEN_ADDR%% *}"
+  case "$addr" in
+    0.0.0.0|::|"[::]") lan_ip ;;
+    *) echo "$addr" ;;
+  esac
+}
+
 banner() {
-  echo "proxy: http://$(lan_ip):$LISTEN_PORT -> $UPSTREAM"
+  echo "proxy: http://$(proxy_host):$LISTEN_PORT -> $UPSTREAM"
 }
 
 cmd="${1:-run}"
@@ -69,7 +80,7 @@ case "$cmd" in
   tui)
     caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null
     check_upstream
-    PROXY_URL="http://$(lan_ip):$LISTEN_PORT" exec python3 "$DIR/homeproxy-tui.py"
+    PROXY_URL="http://$(proxy_host):$LISTEN_PORT" exec python3 "$DIR/homeproxy-tui.py"
     ;;
   start)
     caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null

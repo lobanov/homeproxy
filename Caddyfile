@@ -4,8 +4,12 @@
 #   UPSTREAM     tailnet service, e.g. https://box.tail1234.ts.net (port defaults to 443)
 #                An https:// upstream enables TLS automatically; use the MagicDNS
 #                name, not a 100.x IP, so the certificate (SNI) matches.
-#   LISTEN_PORT  port to expose on the LAN (default 8080)
-#   API_KEY      required in requests as `Authorization: Bearer <API_KEY>`
+#   LISTEN_ADDR  address(es) to bind, space-separated (default 127.0.0.1);
+#                0.0.0.0 to serve the LAN
+#   LISTEN_PORT  port to listen on (default 8080)
+#   API_KEY      required in requests as `Authorization: Bearer <API_KEY>`;
+#                empty disables auth
+#   UPSTREAM_API_KEY  optional; sent upstream as `Authorization: Bearer <UPSTREAM_API_KEY>`
 {
 	# Plain HTTP on the LAN; no certificates.
 	auto_https off
@@ -22,32 +26,45 @@
 }
 
 :{$LISTEN_PORT:8080} {
+	bind {$LISTEN_ADDR:127.0.0.1}
+
 	# Only serve clients on private/loopback ranges.
 	@outside not remote_ip private_ranges
 	respond @outside "Forbidden" 403
 
-	# Bearer token auth.
-	@unauthorized not header Authorization "Bearer {$API_KEY}"
+	# Bearer token auth, skipped when API_KEY is empty.
+	@unauthorized {
+		expression `"{$API_KEY}" != ""`
+		not header Authorization "Bearer {$API_KEY}"
+	}
 	handle @unauthorized {
 		header WWW-Authenticate "Bearer"
 		header Content-Type application/json
 		respond `{"error":{"message":"Invalid or missing API key","type":"unauthorized"}}` 401
 	}
 
-	reverse_proxy {$UPSTREAM} {
-		# Flush every write immediately: required for SSE, chunked and
-		# token-by-token streaming responses. WebSockets are handled automatically.
-		flush_interval -1
+	# Authorized requests only (handle blocks are mutually exclusive).
+	handle {
+		# Never pass the client's key on to the upstream; send the upstream's own
+		# key instead when one is configured. Resolved when the config is loaded,
+		# so `./homeproxy.sh reload` picks up .env changes.
+		@upstreamKey expression `"{$UPSTREAM_API_KEY}" != ""`
+		@noUpstreamKey expression `"{$UPSTREAM_API_KEY}" == ""`
+		request_header @upstreamKey Authorization "Bearer {$UPSTREAM_API_KEY}"
+		request_header @noUpstreamKey -Authorization
 
-		# Don't pass the proxy's key on to the upstream.
-		header_up -Authorization
+		reverse_proxy {$UPSTREAM} {
+			# Flush every write immediately: required for SSE, chunked and
+			# token-by-token streaming responses. WebSockets are handled automatically.
+			flush_interval -1
 
-		# Keep WebSockets/streams open for a while across `caddy reload`.
-		stream_close_delay 5m
+			# Keep WebSockets/streams open for a while across `caddy reload`.
+			stream_close_delay 5m
 
-		transport http {
-			dial_timeout 10s
-			keepalive 2m
+			transport http {
+				dial_timeout 10s
+				keepalive 2m
+			}
 		}
 	}
 
