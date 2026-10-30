@@ -1,7 +1,9 @@
 # homeproxy
 
-Caddy reverse proxy that exposes an HTTPS service on your tailnet to the local
+Caddy reverse proxy that exposes a remote HTTPS service to the local
 network, tuned for streaming responses (SSE, chunked, token-by-token LLM output).
+It is handy for exposing authenticated upstream APIs to coding agents
+or to opening Tailscale-proxied services to the local network.
 
 - Responses are flushed immediately; no read/write timeouts cut long streams.
 - Clients authenticate with their own key (`API_KEY`), which is never forwarded; the
@@ -9,10 +11,11 @@ network, tuned for streaming responses (SSE, chunked, token-by-token LLM output)
 - Listens on this machine only by default; opt in to serving the LAN. Only
   private/loopback client addresses are served. See [Listening address](#listening-address).
 - Plain HTTP between clients and the proxy; TLS to the upstream.
+- Exposes minimalistic terminal UI allowing to see request and response payloads.
 
 ## Setup
 
-Requires Caddy (`brew install caddy`) and Tailscale running on this machine.
+Requires Caddy (`brew install caddy`).
 
 ```bash
 cp .env.example .env
@@ -22,7 +25,7 @@ Edit `.env`:
 
 | Variable      | Meaning                                                              |
 |---------------|----------------------------------------------------------------------|
-| `UPSTREAM`    | Tailnet service, e.g. `https://box.tail1234.ts.net:8443`. Use the MagicDNS name so the certificate matches. |
+| `UPSTREAM`    | Upstream service, e.g. `https://box.tail1234.ts.net:8443`. For Tailscale use the MagicDNS name so the certificate matches. |
 | `LISTEN_ADDR` | Address(es) to bind, space-separated (default `127.0.0.1`, this machine only). Use `0.0.0.0` to serve the LAN. |
 | `LISTEN_PORT` | Port to listen on (default `8080`).                                  |
 | `API_KEY`     | Bearer key clients must send. Generate with `openssl rand -hex 32`. Must be present; set it empty (`API_KEY=`) to disable auth. |
